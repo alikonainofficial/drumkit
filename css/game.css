@@ -11,7 +11,7 @@
 }
 .pad {
   --c: #5fe0d4;
-  position: relative; width: clamp(76px, 11.5vw, 116px); aspect-ratio: 1; margin: 0;
+  position: relative; width: clamp(64px, calc((100% - 36px) / 4), 116px); aspect-ratio: 1; margin: 0;
   border: 2px solid #2a5a63; border-radius: 14px; cursor: pointer; overflow: hidden;
   /* the pad art has white backgrounds (snare, crash, kick), so the pad face is white like the original kit */
   background-color: #ffffff; background-position: center; background-size: contain; background-repeat: no-repeat;
@@ -20,6 +20,12 @@
   touch-action: none; -webkit-tap-highlight-color: transparent; outline: none;
 }
 .pad:focus-visible { box-shadow: 0 0 0 3px #e2bb6e; }
+@media (max-width: 520px) {
+  .drums { padding: 12px 10px; }
+  .pads { gap: 8px; }
+  .pad { padding: 6px 6px 20px; }
+  .pad-name { display: none; }
+}
 .pad-key {
   position: absolute; left: 6px; bottom: 5px; min-width: 20px; padding: 1px 5px; border-radius: 6px;
   background: rgba(4, 9, 10, 0.75); color: var(--c);
@@ -53,6 +59,43 @@
   from { transform: translate(var(--x), var(--y)) scale(0.1); opacity: 0.9; }
   to   { transform: translate(var(--x), var(--y)) scale(1.6); opacity: 0; }
 }
+
+/* ------------------------------------------------------------ transport (loop recorder) */
+.transport { position: relative; z-index: 1; display: flex; flex-direction: column; gap: 8px; }
+.transport-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.tbtn, .tselect, .tlayer-sel, .tlayer-btn {
+  background: #163a42; color: #eef3ec; border: 1px solid #2a5a63; border-radius: 999px;
+  padding: 6px 12px; font: inherit; font-size: 14px; cursor: pointer; line-height: 1.2;
+}
+.tbtn:hover, .tselect:hover, .tlayer-sel:hover, .tlayer-btn:hover { border-color: #e2bb6e; }
+.tbtn:focus-visible, .tselect:focus-visible, .tlayer-sel:focus-visible, .tlayer-btn:focus-visible, .tbpm input:focus-visible { outline: 2px solid #e2bb6e; outline-offset: 2px; }
+.tbtn.is-on { background: #1e4852; border-color: #e2bb6e; color: #efd096; }
+.tbtn-rec { color: #ff7a59; }
+.tbtn-rec.is-on { background: #e0564b; border-color: #e0564b; color: #fff; }
+.tselect { appearance: auto; padding: 6px 10px; }
+.tbtn:disabled, .tselect:disabled, .tlayer-btn:disabled, .tbpm input:disabled { opacity: 0.45; cursor: default; }
+.tbpm { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; color: #b3c8c0; }
+.tbpm input { width: 110px; accent-color: #e2bb6e; }
+.tbpm-v { font-family: "Pixelify Sans", "Silkscreen", "Courier New", monospace; color: #efd096; min-width: 2.2em; }
+.tstatus { min-height: 20px; font-size: 14px; color: #b3c8c0; }
+.tprogress { display: grid; grid-template-columns: repeat(32, 1fr); gap: 2px; height: 8px; }
+.tcell { background: #163a42; border-radius: 2px; }
+.tcell-beat { background: #1e4852; }
+.tcell-bar { background: #2a5a63; }
+.tcell.is-now { background: #e2bb6e; }
+.tlayers { display: flex; flex-direction: column; gap: 4px; }
+.tlayer { display: grid; grid-template-columns: 34px 1fr 34px 34px; align-items: center; gap: 6px; }
+.tlayer-sel, .tlayer-btn { padding: 3px 0; border-radius: 8px; font-size: 13px; }
+.tlayer-strip { display: grid; grid-template-columns: repeat(32, 1fr); gap: 2px; height: 14px; }
+.tdot { background: #0f2a2f; border-radius: 3px; }
+.tdot-beat { background: #163a42; }
+.tdot.on { box-shadow: inset 0 0 0 1px rgba(255,255,255,0.25); }
+.tlayer.is-empty { opacity: 0.4; }
+.tlayer.is-empty .tlayer-sel { cursor: default; }
+.tlayer.is-selected .tlayer-sel { background: #e2bb6e; color: #1d1d1f; border-color: #e2bb6e; }
+.tlayer.is-muted .tlayer-strip { opacity: 0.3; }
+.tlayer.is-muted .tlayer-mute { background: #1e4852; color: #efd096; border-color: #e2bb6e; }
+.tlayer.is-recording .tlayer-sel { background: #e0564b; color: #fff; border-color: #e0564b; }
 
 @media (prefers-reduced-motion: reduce) {
   .splash-layer { display: none; }
