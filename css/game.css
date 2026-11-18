@@ -5,6 +5,18 @@
   display: flex; flex-direction: column; gap: 12px; padding: 16px; box-sizing: border-box; min-height: 320px;
 }
 
+/* ------------------------------------------------------------ white text: the cabinet's pixel/monospace font
+   Same stack as the shell's title and HUD (and as Brick Breaker's white overlay text) instead of the system sans:
+   the shell's overlay lines and buttons (results, pause) plus this game's own controls.
+   Two classes deep so these beat the shell's own rules (arcade-shell.css loads after this file). */
+.arcade-overlay .arcade-overlay-line,
+.arcade-overlay .arcade-btn,
+.drums .tbtn, .drums .tselect, .drums .tlayer-sel, .drums .tlayer-btn, .drums .ch-pick, .drums .mode-btn, .drums .tbpm-k {
+  font-family: "Pixelify Sans", "Silkscreen", "Courier New", monospace;
+}
+/* the monospace face is wider: slightly tighter transport buttons keep the bar on one row on desktop */
+.drums .tbtn, .drums .tselect { font-size: 13px; padding-left: 10px; padding-right: 10px; }
+
 /* ------------------------------------------------------------ pads */
 .pads {
   position: relative; z-index: 1; display: flex; flex-wrap: wrap; justify-content: center; gap: 12px;
