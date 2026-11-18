@@ -14,6 +14,8 @@
   --c: #5fe0d4;
   position: relative; width: clamp(64px, calc((100% - 36px) / 4), 116px); aspect-ratio: 1; margin: 0;
   border: 2px solid #2a5a63; border-radius: 14px; cursor: pointer; overflow: hidden;
+  border-color: color-mix(in srgb, var(--c) 55%, #2a5a63); /* subtle pad-colour rim on the dark stage */
+  box-shadow: 0 0 0 1px rgba(4, 9, 10, 0.6), 0 6px 14px rgba(4, 16, 19, 0.45);
   /* the pad art has white backgrounds (snare, crash, kick), so the pad face is white like the original kit */
   background-color: #ffffff; background-position: center; background-size: contain; background-repeat: no-repeat;
   background-origin: content-box; /* background-image is set inline from the pad table */
