@@ -1,6 +1,7 @@
 /* game.css — Drum Kit. Loaded before arcade-shell.css (the shell styles the stage chrome). */
 .drums {
-  position: relative; overflow: hidden; border-radius: 8px; background: #061315;
+  /* z-index makes this a stacking context, so nothing inside can paint over the shell's overlay */
+  position: relative; z-index: 0; overflow: hidden; border-radius: 8px; background: #061315;
   display: flex; flex-direction: column; gap: 12px; padding: 16px; box-sizing: border-box; min-height: 320px;
 }
 
@@ -97,6 +98,67 @@
 .tlayer.is-muted .tlayer-mute { background: #1e4852; color: #efd096; border-color: #e2bb6e; }
 .tlayer.is-recording .tlayer-sel { background: #e0564b; color: #fff; border-color: #e0564b; }
 
+.drums [hidden] { display: none !important; }
+
+/* ------------------------------------------------------------ mode switch */
+.modes { position: relative; z-index: 1; display: inline-flex; align-self: center; gap: 2px; padding: 3px; border-radius: 999px; background: #0f2a2f; border: 1px solid #2a5a63; }
+.mode-btn { background: transparent; color: #b3c8c0; border: 0; border-radius: 999px; padding: 6px 16px; font: inherit; font-size: 14px; cursor: pointer; }
+.mode-btn:hover { color: #efd096; }
+.mode-btn.is-on { background: #e2bb6e; color: #1d1d1f; }
+.mode-btn:focus-visible { outline: 2px solid #e2bb6e; outline-offset: 2px; }
+
+/* ------------------------------------------------------------ rhythm challenge */
+.challenge { position: relative; z-index: 1; display: flex; flex-direction: column; gap: 8px; }
+.ch-picker { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+.ch-pick {
+  display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 4px; border-radius: 10px;
+  background: #163a42; color: #eef3ec; border: 1px solid #2a5a63; font: inherit; font-size: 13px; cursor: pointer; min-width: 0;
+}
+.ch-pick:hover { border-color: #e2bb6e; }
+.ch-pick:disabled { opacity: 0.4; cursor: default; }
+.ch-pick.is-selected { border-color: #e2bb6e; background: #1e4852; }
+.ch-pick-n { font-family: "Pixelify Sans", "Silkscreen", "Courier New", monospace; color: #efd096; }
+.ch-pick-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.ch-pick-stars { min-height: 1.2em; color: #f2d16b; letter-spacing: 0.1em; font-size: 12px; }
+.ch-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.ch-info { font-size: 13px; color: #b3c8c0; }
+.tbtn-start { color: #7ed9a0; }
+.tbtn-start.is-on { color: #fff; background: #e0564b; border-color: #e0564b; }
+
+.lane { position: relative; height: 72px; border-radius: 10px; background: #0f2a2f; overflow: hidden; box-shadow: inset 0 0 0 1px #2a5a63; }
+.lane-hitline { position: absolute; top: 6px; bottom: 6px; left: 12%; width: 4px; margin-left: -2px; background: #e2bb6e; border-radius: 2px; box-shadow: 0 0 10px rgba(226, 187, 110, 0.6); }
+.lane-notes { position: absolute; inset: 0; }
+.lane-note {
+  position: absolute; left: -17px; top: 50%; width: 34px; height: 34px; border-radius: 7px; background: var(--c); color: #04090a;
+  display: flex; align-items: center; justify-content: center; font-family: "Pixelify Sans", "Silkscreen", "Courier New", monospace; font-weight: 700;
+  will-change: transform; transition: opacity 160ms ease-out;
+}
+.lane-note.is-perfect, .lane-note.is-good { opacity: 0; }
+.lane-note.is-miss { opacity: 0.25; filter: grayscale(1); }
+.lane-labels { position: absolute; left: 12%; top: 4px; width: 0; pointer-events: none; }
+.lane-label {
+  position: absolute; left: 10px; top: 0; white-space: nowrap; font-family: "Pixelify Sans", "Silkscreen", "Courier New", monospace; font-size: 16px;
+  animation: lane-float 700ms ease-out forwards; text-shadow: 0 1px 2px #04090a;
+}
+.lane-label-perfect { color: #7ed9a0; }
+.lane-label-good { color: #f2d16b; }
+.lane-label-miss { color: #e0564b; }
+.lane-label-extra { color: #b3c8c0; font-size: 13px; top: 40px; }
+@keyframes lane-float { from { transform: translateY(6px); opacity: 1; } to { transform: translateY(-8px); opacity: 0; } }
+.lane-combo { position: absolute; right: 12px; top: 8px; font-family: "Pixelify Sans", "Silkscreen", "Courier New", monospace; color: #efd096; font-size: 16px; }
+.lane-big { position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%); text-align: center; font-family: "Pixelify Sans", "Silkscreen", "Courier New", monospace; font-size: 40px; color: #ff7a59; pointer-events: none; }
+.stage-flash { position: absolute; inset: 0; z-index: 3; background: #efd096; pointer-events: none; opacity: 0; }
+.ch-stars { color: #f2d16b; letter-spacing: 0.08em; }
+
+@media (max-width: 520px) {
+  .ch-picker { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .ch-pick { font-size: 11px; }
+  .mode-btn { padding: 6px 12px; }
+  .lane-note { width: 22px; height: 22px; left: -11px; border-radius: 5px; font-size: 12px; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .splash-layer { display: none; }
+  .lane-label { animation-name: lane-fade; }
 }
+@keyframes lane-fade { from { opacity: 1; } to { opacity: 0; } }

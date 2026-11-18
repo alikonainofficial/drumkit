@@ -1,12 +1,12 @@
 /*
- * game.js — Drum Kit: instrument + loop recorder (+ rhythm challenge).
+ * game.js — Drum Kit: instrument + loop recorder + rhythm challenge.
  * Plain script, no modules. Depends on js/arcade-shell.js (window.Arcade) and js/patterns.js (window.DRUM_PATTERNS).
  */
 (function () {
   'use strict';
 
   var A = window.Arcade, T = A.theme;
-  var DATA = window.DRUM_PATTERNS || { demos: [] };
+  var DATA = window.DRUM_PATTERNS || { demos: [], challenge: [], stars: [70, 85, 95] };
 
   // ------------------------------------------------------------------ pad table (single source of truth)
   // Looked up by event.code, so Shift / Caps Lock / keyboard layout case never matter.
@@ -43,7 +43,9 @@
   var root = $('drums');
   var frame = document.querySelector('.arcade-frame');
   frame.style.aspectRatio = '';
-  frame.appendChild(root);
+  // Before the shell's overlay rather than after it: both are positioned without a z-index,
+  // so DOM order decides which paints on top, and the overlay (results / pause) must win.
+  frame.insertBefore(root, frame.querySelector('.arcade-overlay'));
 
   var padsEl = $('pads');
   var splashLayer = $('splashLayer');
@@ -88,7 +90,7 @@
     if (loading) return loading;
     loading = Promise.all(PADS.map(function (p) { return A.sfx.sample(p.file); })).then(function (list) {
       buffers = list;
-      if (pendingHit && performance.now() - pendingHit.t < 250) play(pendingHit.pad, pendingHit.vel, 0);
+      if (pendingHit && performance.now() - pendingHit.t < 250) play(pendingHit.pad, pendingHit.vel);
       pendingHit = null;
       renderHud();
       return list;
@@ -101,10 +103,12 @@
     return loading;
   }
 
-  // delay is seconds from now (0 = immediately)
-  function play(pad, vel, delay) {
+  // when = audio-clock time to start (omit for "now"). playSample takes a delay relative to currentTime, and
+  // currentTime moves while JS runs, so the delay is computed right at the call to keep scheduled hits exact.
+  function play(pad, vel, when) {
     if (!buffers || !buffers[pad.index]) return false;
-    A.sfx.playSample(buffers[pad.index], { vol: vel == null ? 1 : vel, delay: delay > 0 ? delay : 0 });
+    var c = ctx(), delay = when == null ? 0 : Math.max(0, when - c.currentTime);
+    A.sfx.playSample(buffers[pad.index], { vol: vel == null ? 1 : vel, delay: delay });
     return true;
   }
 
@@ -132,11 +136,12 @@
       pendingHit = { pad: pad, vel: vel, t: performance.now() };
       loadSamples();
     } else {
-      play(pad, vel, 0);
+      play(pad, vel);
     }
     flashPad(pad);
     splash(pad);
     if (rec) recordHit(pad, eventAudioTime(e));
+    if (ch && ch.state === 'run') judgeHit(pad, eventAudioTime(e));
   }
 
   // ------------------------------------------------------------------ visuals
@@ -287,7 +292,7 @@
   }
   window.addEventListener('hashchange', function () {
     var beat = decodeBeat(location.hash);
-    if (beat && location.hash !== encodeHash()) { applyBeat(beat); setStatus('Beat loaded from the link — press Play'); }
+    if (beat && location.hash !== encodeHash()) { setMode('loop'); applyBeat(beat); setStatus('Beat loaded from the link — press Play'); }
   });
 
   // ---------------------------------------------------- transport UI
@@ -389,8 +394,9 @@
     v = clamp(Math.round(v) || BPM_DEFAULT, BPM_MIN, BPM_MAX);
     if (v === bpm) return;
     // While playing, the next unscheduled step keeps its time and the new tempo applies from there on.
-    if (tr.state === 'playing') { tr.origin = tr.nextTime; tr.originN = tr.n; }
+    if (tr.state === 'playing' && !ch) { tr.origin = tr.nextTime; tr.originN = tr.n; }
     bpm = v; syncBpmUi();
+    if (!ch) tr.sx = sixteenth();
     saveLoop();
   }
 
@@ -443,14 +449,14 @@
   // ---------------------------------------------------- the clock: lookahead scheduler on audio time
   // Step n (counted from origin) plays at origin + (n - originN) * sixteenth — computed, never accumulated,
   // so there is no drift however long the loop runs.
-  var tr = { state: 'stopped', timer: 0, origin: 0, originN: 0, n: 0, nextTime: 0, startStep: 0, pausedStep: 0, countIn: null };
+  var tr = { state: 'stopped', timer: 0, origin: 0, originN: 0, n: 0, sx: 0.1667, nextTime: 0, startStep: 0, pausedStep: 0, countIn: null };
   var rec = null; // { layer, steps, start, end, replace }
   var visQ = [];  // { t, type: 'pad'|'step'|'count', pad, step, n }
 
-  function stepTime(n) { return tr.origin + (n - tr.originN) * sixteenth(); }
+  function stepTime(n) { return tr.origin + (n - tr.originN) * tr.sx; }
 
   function startClock(atTime, fromStep) {
-    tr.origin = atTime; tr.originN = 0; tr.n = 0; tr.nextTime = atTime; tr.startStep = fromStep || 0;
+    tr.origin = atTime; tr.originN = 0; tr.n = 0; tr.nextTime = atTime; tr.startStep = fromStep || 0; tr.sx = sixteenth();
     clearInterval(tr.timer);
     tr.timer = setInterval(schedule, TICK_MS);
     schedule();
@@ -459,14 +465,17 @@
     var c = ctx(); if (!c) return;
     var horizon = c.currentTime + LOOKAHEAD;
     while (tr.nextTime < horizon) {
-      var step = mod(tr.startStep + tr.n, STEPS);
-      scheduleStep(step, tr.nextTime);
+      if (ch) {                                      // the challenge runs once through its 64 steps
+        if (tr.n >= ch.total) break;
+        challengeStep(tr.n, tr.nextTime);
+      } else {
+        scheduleStep(mod(tr.startStep + tr.n, STEPS), tr.nextTime);
+      }
       tr.n++;
       tr.nextTime = stepTime(tr.n);
     }
   }
   function scheduleStep(step, t) {
-    var c = ctx(), delay = t - c.currentTime;
     if (metronomeOn && step % 4 === 0) tick(t, step === 0 || step === 16);
     layers.forEach(function (L) {
       if (L.muted) return;
@@ -476,7 +485,7 @@
         steps = rec.steps;                     // from the next pass on, the new take plays
       }
       steps[step].forEach(function (pi) {
-        play(PADS[pi], 0.9, delay);
+        play(PADS[pi], 0.9, t);
         visQ.push({ t: t, type: 'pad', pad: PADS[pi] });
       });
     });
@@ -538,6 +547,15 @@
     if (layers.length >= MAX_LAYERS) { target = layers[selected]; replace = true; }
     else { target = { steps: emptySteps(), muted: false, pending: true }; layers.push(target); selected = layers.length - 1; }
     rec = { layer: target, steps: emptySteps(), start: start, end: start + STEPS * sixteenth(), replace: replace };
+    countInThenClock(t0, beat, sixteenth());
+    setStatus('Count-in…');
+    renderLayers();
+  }
+
+  // 4-beat count-in (tick, tick, tick, long beep) from t0, then the step clock starts on the downbeat.
+  // Used by the recorder and the challenge. schedule() keeps 100 ms ahead, so it begins just before the downbeat.
+  function countInThenClock(t0, beat, sx) {
+    var start = t0 + 4 * beat;
     for (var i = 0; i < 4; i++) {
       var bt = t0 + i * beat;
       if (i < 3) tick(bt, false); else countdownBeep(bt, true);
@@ -545,15 +563,13 @@
     }
     tr.state = 'countin';
     tr.countIn = { start: t0, end: start };
-    // The clock starts at the downbeat; schedule() keeps 100 ms ahead, so it begins just before it.
-    tr.origin = start; tr.originN = 0; tr.n = 0; tr.nextTime = start; tr.startStep = 0;
+    tr.origin = start; tr.originN = 0; tr.n = 0; tr.nextTime = start; tr.startStep = 0; tr.sx = sx;
     clearInterval(tr.timer);
     tr.timer = setInterval(function () {
       if (tr.state === 'countin' && ctx().currentTime >= start - LOOKAHEAD) tr.state = 'playing';
       if (tr.state === 'playing') schedule();
     }, TICK_MS);
-    setStatus('Count-in…');
-    renderLayers();
+    return start;
   }
 
   function recordHit(pad, t) {
@@ -587,9 +603,297 @@
     selected = clamp(selected, 0, Math.max(0, layers.length - 1));
   }
 
+  // =================================================================== RHYTHM CHALLENGE
+
+  var WIN_PERFECT = 0.050, WIN_GOOD = 0.100;          // ± seconds
+  var SCORE = { perfect: 100, good: 60, miss: 0 };
+  var STAR_AT = DATA.stars || [70, 85, 95];
+  var CH_STEPS = 64;                                  // 4 bars
+  var LANE_AHEAD_STEPS = 32;                          // 2 bars visible ahead of the hit line
+
+  var chIndex = 0;
+  var guideOverride = {};                             // pattern index → guide on/off chosen by the player
+  var ch = null;  // { state: 'countin'|'run', idx, pattern, sx, start, total, notes:[{t, pad, step, el, result}], combo, maxCombo, counts, extras }
+
+  function challengeRecords() { var r = A.store.get('challenge', {}); return r && typeof r === 'object' ? r : {}; }
+  function starsFor(acc) { var n = 0; STAR_AT.forEach(function (t) { if (acc >= t) n++; }); return n; }
+  function starText(n) { var s = ''; for (var i = 0; i < 3; i++) s += i < n ? '★' : '☆'; return s; }
+  function totalStars() {
+    var r = challengeRecords(), n = 0;
+    DATA.challenge.forEach(function (p, i) { if (r[i]) n += clamp(r[i].stars | 0, 0, 3); });
+    return n;
+  }
+  function guideOn(idx) { return guideOverride[idx] != null ? guideOverride[idx] : !challengeRecords()[idx]; } // on the first time
+
+  var cui = buildChallenge();
+
+  function buildChallenge() {
+    var panel = h('div', 'challenge');
+    panel.id = 'challenge';
+
+    var picker = h('div', 'ch-picker');
+    var pickBtns = DATA.challenge.map(function (p, i) {
+      var b = noMouseFocus(h('button', 'ch-pick')); b.type = 'button';
+      b.innerHTML = '<span class="ch-pick-n">' + (i + 1) + '</span><span class="ch-pick-name"></span><span class="ch-pick-stars"></span>';
+      b.querySelector('.ch-pick-name').textContent = p.name;
+      b.addEventListener('click', function () { selectPattern(i); });
+      picker.appendChild(b);
+      return b;
+    });
+    panel.appendChild(picker);
+
+    var row = h('div', 'ch-row');
+    var startBtn = noMouseFocus(h('button', 'tbtn tbtn-start', '▶ Start')); startBtn.type = 'button';
+    startBtn.title = 'Start / stop (Space or Enter)';
+    var guideBtn = noMouseFocus(h('button', 'tbtn', 'Guide')); guideBtn.type = 'button';
+    guideBtn.title = 'Play the pattern quietly while you drum';
+    var info = h('div', 'ch-info');
+    row.appendChild(startBtn); row.appendChild(guideBtn); row.appendChild(info);
+    panel.appendChild(row);
+
+    var lane = h('div', 'lane');
+    var hitLine = h('div', 'lane-hitline');
+    var notesEl = h('div', 'lane-notes');
+    var labels = h('div', 'lane-labels');
+    var combo = h('div', 'lane-combo');
+    var big = h('div', 'lane-big');
+    lane.appendChild(notesEl); lane.appendChild(hitLine); lane.appendChild(labels); lane.appendChild(combo); lane.appendChild(big);
+    panel.appendChild(lane);
+
+    var status = h('div', 'tstatus ch-status', ''); status.setAttribute('aria-live', 'polite');
+    panel.appendChild(status);
+
+    root.insertBefore(panel, padsEl);
+
+    startBtn.addEventListener('click', toggleChallenge);
+    guideBtn.addEventListener('click', function () { guideOverride[chIndex] = !guideOn(chIndex); renderChallenge(); });
+
+    return { panel: panel, pick: pickBtns, start: startBtn, guide: guideBtn, info: info, lane: lane, notes: notesEl,
+             labels: labels, combo: combo, big: big, status: status };
+  }
+
+  function selectPattern(i) {
+    if (ch) return;
+    chIndex = mod(i, DATA.challenge.length);
+    clearLane();
+    renderChallenge();
+    setChStatus('Press Start (Space) — a 4-beat count-in, then play along');
+  }
+  function setChStatus(t) { cui.status.textContent = t || ''; }
+
+  function renderChallenge() {
+    var recs = challengeRecords(), p = DATA.challenge[chIndex];
+    cui.pick.forEach(function (b, i) {
+      b.classList.toggle('is-selected', i === chIndex);
+      b.disabled = !!ch && i !== chIndex;
+      b.querySelector('.ch-pick-stars').textContent = recs[i] ? starText(recs[i].stars | 0) : '';
+      b.setAttribute('aria-pressed', i === chIndex ? 'true' : 'false');
+    });
+    cui.start.textContent = ch ? '■ Stop' : '▶ Start';
+    cui.start.classList.toggle('is-on', !!ch);
+    var g = guideOn(chIndex);
+    cui.guide.textContent = 'Guide: ' + (g ? 'on' : 'off');
+    cui.guide.classList.toggle('is-on', g);
+    cui.guide.setAttribute('aria-pressed', g ? 'true' : 'false');
+    cui.guide.disabled = !!ch;
+    if (p) cui.info.textContent = p.blurb + ' · ' + p.bpm + ' BPM · ' + p.steps.length + ' notes';
+    renderHud();
+  }
+
+  function clearLane() {
+    cui.notes.innerHTML = ''; cui.labels.innerHTML = ''; cui.combo.textContent = ''; cui.big.textContent = '';
+  }
+
+  function toggleChallenge() {
+    if (ch) { abortChallenge('Stopped'); return; }
+    ensureAudioThen(startChallenge);
+  }
+
+  function startChallenge() {
+    if (ch || mode !== 'challenge') return;
+    A.ui.hideOverlay();
+    stopTransport();
+    var p = DATA.challenge[chIndex];
+    var c = ctx(), beat = 60 / p.bpm, sx = beat / 4, t0 = c.currentTime + 0.1;
+    var start = t0 + 4 * beat;
+    clearLane();
+    var notes = p.steps.map(function (s) {
+      var pad = PAD_BY_KEY[s.pad];
+      var el = h('div', 'lane-note', pad.label);
+      el.style.setProperty('--c', pad.color);
+      cui.notes.appendChild(el);
+      return { t: start + s.step * sx, step: s.step, pad: pad, el: el, result: null };
+    });
+    ch = { state: 'countin', idx: chIndex, pattern: p, sx: sx, start: start, total: CH_STEPS, notes: notes, next: 0,
+           guide: guideOn(chIndex), combo: 0, maxCombo: 0, counts: { perfect: 0, good: 0, miss: 0 }, extras: 0,
+           end: start + (p.steps[p.steps.length - 1].step) * sx + WIN_GOOD + 0.05 };
+    countInThenClock(t0, beat, sx);
+    setChStatus('Count-in…');
+    renderChallenge();
+    positionNotes(audibleNow());
+  }
+
+  // Scheduler callback for challenge step n (0–63): metronome on every beat, the quiet guide if on.
+  function challengeStep(n, t) {
+    if (n % 4 === 0) tick(t, n % 16 === 0);
+    if (!ch.guide) return;
+    ch.notes.forEach(function (note) { if (note.step === n) play(note.pad, 0.25, t); });
+  }
+
+  function showChallengeCount(n) { cui.big.textContent = String(n); setChStatus('Count-in ' + n); }
+
+  function judgeHit(pad, t) {
+    var best = null, bestD = Infinity, other = null, otherD = Infinity;
+    for (var i = 0; i < ch.notes.length; i++) {
+      var note = ch.notes[i];
+      if (note.result) continue;
+      var d = Math.abs(t - note.t);
+      if (d > WIN_GOOD) continue;
+      if (note.pad === pad) { if (d < bestD) { best = note; bestD = d; } }
+      else if (d < otherD) { other = note; otherD = d; }
+    }
+    if (best) judge(best, bestD <= WIN_PERFECT ? 'perfect' : 'good', t - best.t);
+    else if (other) judge(other, 'miss', null, 'wrong pad');
+    else { ch.extras++; floatLabel('extra', 'extra'); }
+  }
+
+  function judge(note, result, offset, why) {
+    note.result = result;
+    ch.counts[result]++;
+    if (result === 'miss') ch.combo = 0;
+    else { ch.combo++; ch.maxCombo = Math.max(ch.maxCombo, ch.combo); }
+    note.el.classList.add('is-' + result);
+    var label = result === 'perfect' ? 'Perfect' : result === 'good' ? 'Good' : 'Miss';
+    if (why) label += ' · ' + why;
+    else if (offset != null && result === 'good') label += offset < 0 ? ' · early' : ' · late';
+    floatLabel(label, result);
+    cui.combo.textContent = ch.combo > 1 ? ch.combo + ' combo' : '';
+    renderHud();
+  }
+
+  function floatLabel(text, kind) {
+    // one judgement label at a time (plus one "extra"), so fast passages stay readable
+    Array.prototype.slice.call(cui.labels.children).forEach(function (old) {
+      if ((kind === 'extra') === old.classList.contains('lane-label-extra')) cui.labels.removeChild(old);
+    });
+    var l = h('div', 'lane-label lane-label-' + kind, text);
+    l.addEventListener('animationend', function () { if (l.parentNode) l.parentNode.removeChild(l); });
+    cui.labels.appendChild(l);
+  }
+
+  function positionNotes(now) {
+    // 2 bars ahead; on a narrow (phone) lane 2 bars of sixteenths would overlap, so show 1 bar there
+    var w = cui.lane.clientWidth, hitX = Math.round(w * 0.12), span = (w < 600 ? 16 : LANE_AHEAD_STEPS) * ch.sx;
+    for (var i = 0; i < ch.notes.length; i++) {
+      var note = ch.notes[i], x = hitX + (note.t - now) / span * (w - hitX);
+      if (x > w + 40 || x < -60) { if (note.vis !== false) { note.el.style.visibility = 'hidden'; note.vis = false; } continue; }
+      if (note.vis !== true) { note.el.style.visibility = ''; note.vis = true; }
+      note.el.style.transform = 'translate(' + x.toFixed(1) + 'px, -50%)';
+    }
+  }
+
+  function updateChallenge(now) {
+    if (!ch) return;
+    if (ch.state === 'countin' && now >= ch.start - WIN_GOOD) { ch.state = 'run'; }
+    if (ch.state === 'run' && now >= ch.start) { if (cui.big.textContent) cui.big.textContent = ''; if (/^Count-in/.test(cui.status.textContent)) setChStatus('Go!'); }
+    positionNotes(now);
+    // Notes whose window has passed without a hit are misses.
+    for (var i = 0; i < ch.notes.length; i++) {
+      var note = ch.notes[i];
+      if (!note.result && now > note.t + WIN_GOOD) judge(note, 'miss');
+    }
+    if (now >= ch.end) finishChallenge();
+  }
+
+  function accuracyOf(c) {
+    var n = c.notes.length; if (!n) return 0;
+    var sum = c.counts.perfect * SCORE.perfect + c.counts.good * SCORE.good + c.counts.miss * SCORE.miss;
+    return Math.round(sum / n);
+  }
+
+  function finishChallenge() {
+    var c = ch; ch = null;
+    clearInterval(tr.timer); tr.timer = 0; tr.state = 'stopped'; visQ.length = 0;
+    var acc = accuracyOf(c), stars = starsFor(acc), full = c.counts.miss === 0;
+    A.store.bumpPlays();
+    var all = challengeRecords(), prev = all[c.idx], isBest = !prev || acc > (prev.best | 0);
+    if (isBest) { all[c.idx] = { best: acc, stars: Math.max(stars, prev ? prev.stars | 0 : 0) }; A.store.set('challenge', all); }
+    A.store.set('best', totalStars());
+    var best = all[c.idx].best;
+    if (full) { A.sfx.play('win'); stageFlash(); }
+    setChStatus(full ? 'Full combo!' : 'Done — ' + acc + '%');
+    renderChallenge();
+
+    var shareText = '🥁 Drum Kit · "' + c.pattern.name + '" · ' + acc + '% ' + starText(stars) + (full ? ' · full combo' : '');
+    var buttons = [{ label: 'Retry', onClick: function () { ensureAudioThen(startChallenge); } }];
+    if (c.idx < DATA.challenge.length - 1) buttons.push({ label: 'Next pattern', onClick: function () { selectPattern(c.idx + 1); ensureAudioThen(startChallenge); } });
+    buttons.push({ label: 'Copy result', keepOpen: true, onClick: function () { A.share.copy(shareText, 'Result copied'); } });
+    A.ui.overlay({
+      kicker: (c.idx + 1) + ' / ' + DATA.challenge.length + ' · ' + escapeHtml(c.pattern.name),
+      title: acc + '% <span class="ch-stars">' + starText(stars) + '</span>',
+      lines: [
+        (isBest && prev ? 'New best! ' : '') + 'Best ' + best + '%' + (full ? ' · full combo' : ''),
+        c.counts.perfect + ' perfect · ' + c.counts.good + ' good · ' + c.counts.miss + ' miss' + (c.extras ? ' · ' + c.extras + ' extra' : '') + ' · max combo ' + c.maxCombo
+      ],
+      buttons: buttons,
+      hint: 'Space to retry',
+      action: function () { ensureAudioThen(startChallenge); }
+    });
+  }
+
+  function abortChallenge(msg) {
+    if (!ch) return;
+    ch = null;
+    clearInterval(tr.timer); tr.timer = 0; tr.state = 'stopped'; visQ.length = 0;
+    clearLane();
+    setChStatus(msg ? msg + ' — press Start to try again' : '');
+    renderChallenge();
+  }
+
+  function stageFlash() {
+    if (!root.animate) return;
+    var f = h('div', 'stage-flash'); root.appendChild(f);
+    var a = f.animate([{ opacity: 0.55 }, { opacity: 0 }], { duration: reducedMotion.matches ? 250 : 600, easing: 'ease-out' });
+    a.onfinish = function () { if (f.parentNode) f.parentNode.removeChild(f); };
+  }
+
+  function escapeHtml(t) { return String(t).replace(/[&<>"']/g, function (c) { return '&#' + c.charCodeAt(0) + ';'; }); }
+
+  // =================================================================== MODES: Play / Loop / Challenge
+
+  var mode = 'play';
+  var modeBar = (function () {
+    var bar = h('div', 'modes'); bar.setAttribute('role', 'tablist');
+    var btns = {};
+    [['play', 'Play'], ['loop', 'Loop'], ['challenge', 'Challenge']].forEach(function (m) {
+      var b = noMouseFocus(h('button', 'mode-btn', m[1])); b.type = 'button'; b.setAttribute('role', 'tab');
+      b.addEventListener('click', function () { setMode(m[0]); });
+      bar.appendChild(b); btns[m[0]] = b;
+    });
+    root.insertBefore(bar, ui.bar);
+    return btns;
+  })();
+
+  function setMode(m) {
+    if (m === mode && modeBar[m].classList.contains('is-on')) return;
+    if (ch) abortChallenge();
+    if (tr.state !== 'stopped' || rec) { var wasRec = !!rec || tr.state === 'countin'; stopTransport(); setStatus(wasRec ? 'Recording cancelled' : 'Paused'); renderLayers(); }
+    A.ui.hideOverlay();
+    mode = m;
+    Object.keys(modeBar).forEach(function (k) {
+      modeBar[k].classList.toggle('is-on', k === m);
+      modeBar[k].setAttribute('aria-selected', k === m ? 'true' : 'false');
+    });
+    ui.bar.hidden = m !== 'loop';
+    cui.panel.hidden = m !== 'challenge';
+    root.setAttribute('data-mode', m);
+    if (m === 'challenge') selectPattern(chIndex);
+    renderHud();
+  }
+
   // ---------------------------------------------------- per-frame: visuals follow the audible clock
   function update() {
-    if (!visQ.length && !rec) return;
+    if (!visQ.length && !rec && !ch) return;
     var now = audibleNow();
     var i = 0;
     while (i < visQ.length && visQ[i].t <= now) {
@@ -599,10 +903,13 @@
         if (shownStep != null) ui.cells[shownStep].classList.remove('is-now');
         shownStep = ev.step; ui.cells[shownStep].classList.add('is-now');
         if (rec && now >= rec.start - 0.01 && now < rec.end) setStatus('● Recording layer ' + (layers.indexOf(rec.layer) + 1) + ' — bar ' + (ev.step < 16 ? 1 : 2) + ' of 2');
-      } else if (ev.type === 'count') setStatus('Count-in ' + ev.n);
+      } else if (ev.type === 'count') {
+        if (ch) showChallengeCount(ev.n); else setStatus('Count-in ' + ev.n);
+      }
     }
     if (i) visQ.splice(0, i);
     if (rec && now >= rec.end) finishRecording();
+    if (ch) updateChallenge(now);
   }
   A.loop(update, function () {});
 
@@ -621,13 +928,20 @@
       if (!e.repeat) hit(pad, 1, e);            // holding a key does not machine-gun
       return;
     }
-    if (isButton(e.target) && (e.code === 'Space' || e.code === 'Enter' || e.code === 'NumpadEnter')) return; // native button activation
-    if (e.code === 'Space') { e.preventDefault(); if (!e.repeat) toggleRecord(); return; }
-    if (e.code === 'Enter' || e.code === 'NumpadEnter') { e.preventDefault(); if (!e.repeat) togglePlay(); return; }
-    if (e.repeat) return;
-    if (e.code === 'KeyM') { toggleMute(selected); return; }
-    var dm = /^Digit([1-4])$/.exec(e.code);
-    if (dm && layers[+dm[1] - 1]) { selected = +dm[1] - 1; renderLayers(); }
+    var isSpace = e.code === 'Space', isEnter = e.code === 'Enter' || e.code === 'NumpadEnter';
+    if (isButton(e.target) && (isSpace || isEnter)) return; // native button activation
+    if (mode === 'loop') {
+      if (isSpace) { e.preventDefault(); if (!e.repeat) toggleRecord(); return; }
+      if (isEnter) { e.preventDefault(); if (!e.repeat) togglePlay(); return; }
+      if (e.repeat) return;
+      if (e.code === 'KeyM') { toggleMute(selected); return; }
+      var dm = /^Digit([1-4])$/.exec(e.code);
+      if (dm && layers[+dm[1] - 1]) { selected = +dm[1] - 1; renderLayers(); }
+    } else if (mode === 'challenge') {
+      if (isSpace || isEnter) { e.preventDefault(); if (!e.repeat) toggleChallenge(); }
+    } else if (isSpace) {
+      e.preventDefault(); // free play: Space does nothing (and does not scroll)
+    }
   });
 
   // First gesture anywhere starts loading the samples (the autoplay policy needs a gesture first).
@@ -644,23 +958,39 @@
     var items = {};
     if (!buffers) items.Sound = loading ? 'loading…' : 'tap any pad to start';
     items.Keys = 'W A S D J K L';
-    items.Loop = 'Space rec · Enter play';
+    if (mode === 'loop') items.Loop = 'Space rec · Enter play';
+    if (mode === 'challenge' && DATA.challenge.length) {
+      var p = DATA.challenge[chIndex];
+      items.Pattern = (chIndex + 1) + '/' + DATA.challenge.length + ' ' + escapeHtml(p.name);
+      if (ch) {
+        var judged = ch.counts.perfect + ch.counts.good + ch.counts.miss;
+        items.Combo = String(ch.combo);
+        items.Accuracy = judged ? Math.round((ch.counts.perfect * SCORE.perfect + ch.counts.good * SCORE.good) / judged) + '%' : '—';
+      } else {
+        var r = challengeRecords()[chIndex];
+        items.Best = r ? r.best + '% ' + starText(r.stars | 0) : '—';
+      }
+      items.Stars = totalStars() + '/' + DATA.challenge.length * 3;
+    }
     A.ui.hud(items);
   }
 
   // ------------------------------------------------------------------ shell hooks
-  function onRestart() { // R: back to the top of the loop
+  function onRestart() { // R: back to the top of the loop / restart the challenge
+    if (mode === 'challenge') { if (ch) abortChallenge(); ensureAudioThen(startChallenge); return; }
     if (rec || tr.state === 'countin') return;
     var wasPlaying = tr.state === 'playing';
     stopTransport(); tr.pausedStep = 0;
     if (wasPlaying) togglePlay();
   }
   function onPauseChange(paused) { // P / Esc / tab hidden: stop the clock (timers are throttled in background tabs)
+    if (paused && ch) { abortChallenge('Paused'); return; }
     if (paused && (tr.state !== 'stopped' || rec)) { var wasRec = !!rec || tr.state === 'countin'; stopTransport(); setStatus(wasRec ? 'Recording cancelled' : 'Paused'); renderLayers(); }
   }
 
   // ------------------------------------------------------------------ boot
   var source = loadInitialBeat();
+  setMode(source ? 'loop' : 'play');
   if (source === 'hash') setStatus('Beat loaded from the link — press Play');
   else if (source === 'store') setStatus('Your last beat — press Play');
   else setStatus('Press Rec (Space) to record a layer, or load a beat');
