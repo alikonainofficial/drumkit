@@ -944,6 +944,13 @@
     }
   });
 
+  // A mouse click must not leave focus on a button (ours or the shell's Sound / overlay buttons), or the next
+  // Space / Enter would press that button again instead of Rec / Play. Keyboard (Tab) focus still works.
+  document.addEventListener('mousedown', function (e) {
+    var b = e.target && e.target.closest ? e.target.closest('button') : null;
+    if (b && document.querySelector('.arcade-stage').contains(b)) e.preventDefault();
+  });
+
   // First gesture anywhere starts loading the samples (the autoplay policy needs a gesture first).
   function firstGesture() {
     resumeAudio(); loadSamples();
